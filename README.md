@@ -1,6 +1,6 @@
 tgsay
 =====
-*tgsay* sends messages to Telegram via CLI. It may be used in shell scripts, cron commands, monitoring systems etc.
+**tgsay** sends messages to Telegram via CLI. It may be used in shell scripts, cron commands, monitoring systems etc.
 
 Requirements
 ------------
@@ -38,15 +38,15 @@ Send message using specific bot and chat:
 ```bash
 tgsay --bot="JenkinsBot" --chat="TeamChat" --msg="Build completed"
 ```
-Send messages using defaults:
+Send message using defaults:
 ```bash
 tgsay --msg="Everything is fine"
 ```
-Send silent messages:
+Send silent message:
 ```bash
 tgsay --msg="This one isn't really urgent" --slient
 ```
-Send preformatted messages:
+Send preformatted message:
 ```bash
 tgsay --msg="But this one *urgent* a lot" --md
 ```
