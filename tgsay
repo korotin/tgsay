@@ -1,0 +1,665 @@
+#!/usr/bin/php
+<?php
+
+declare(strict_types=1);
+
+final class ShowUsageException extends RuntimeException
+{
+
+}
+
+final class ConfigException extends RuntimeException
+{
+
+}
+
+abstract class NamedId
+{
+    /**
+     * @var string
+     */
+    private $id;
+
+    /**
+     * @var string
+     */
+    private $name;
+
+    /**
+     * @param string $id
+     * @param string $name
+     */
+    public function __construct(string $id, string $name)
+    {
+        $this->id = $id;
+        $this->name = $name;
+    }
+
+    /**
+     * @return string
+     */
+    public function getId(): string
+    {
+        return $this->id;
+    }
+
+    /**
+     * @return string
+     */
+    public function getName(): string
+    {
+        return $this->name;
+    }
+}
+
+final class Bot extends NamedId
+{
+
+}
+
+final class Chat extends NamedId
+{
+
+}
+
+final class Message
+{
+    public const FORMAT_PLAIN = 'text';
+    public const FORMAT_HTML = 'html';
+    public const FORMAT_MARKDOWN = 'markdown';
+
+    /**
+     * @var string
+     */
+    private $text;
+
+    /**
+     * @var string
+     */
+    private $format;
+
+    /**
+     * @var bool
+     */
+    private $silent;
+
+    /**
+     * @param string $text
+     * @param string $format
+     * @param bool $silent
+     */
+    public function __construct(string $text, string $format, bool $silent)
+    {
+        $this->text = $text;
+        $this->format = $format;
+        $this->silent = $silent;
+    }
+
+    /**
+     * @return string
+     */
+    public function getText(): string
+    {
+        return $this->text;
+    }
+
+    /**
+     * @return string
+     */
+    public function getFormat(): string
+    {
+        return $this->format;
+    }
+
+    /**
+     * @return bool
+     */
+    public function isSilent(): bool
+    {
+        return $this->silent;
+    }
+}
+
+final class MessageBuilder
+{
+    /**
+     * @var Arguments
+     */
+    private $arguments;
+
+    /**
+     * @param Arguments $arguments
+     */
+    public function __construct(Arguments $arguments)
+    {
+        $this->arguments = $arguments;
+    }
+
+    /**
+     * @param string $messageBody
+     *
+     * @return Message
+     */
+    public function build(string $messageBody): Message
+    {
+        $arguments = $this->arguments;
+
+        if ($arguments->isHtml() && $arguments->isMarkdown()) {
+            throw new RuntimeException('Markdown and HTML formatting cannot be applied at the same time');
+        }
+
+        switch (true) {
+            case $arguments->isHtml():
+                $format = Message::FORMAT_HTML;
+                break;
+
+            case $arguments->isMarkdown():
+                $format = Message::FORMAT_MARKDOWN;
+                break;
+
+            default:
+                $format = Message::FORMAT_PLAIN;
+                break;
+        }
+
+        return new Message($messageBody, $format, $arguments->isSilentMessage());
+    }
+}
+
+final class Config
+{
+    public const SECTION_DEFAULTS = 'defaults';
+    public const SECTION_BOTS = 'bots';
+    public const SECTION_CHATS = 'chats';
+    public const KEY_BOT = 'bot';
+    public const KEY_CHAT = 'chat';
+
+    /**
+     * @var array
+     */
+    private $config;
+
+    /**
+     * @var string
+     */
+    private $fileName;
+
+    /**
+     * @param string $fileName
+     */
+    public function __construct(string $fileName)
+    {
+        $this->fileName = $fileName;
+    }
+
+    /**
+     * @return array
+     */
+    private function getConfig(): array
+    {
+        if ($this->config === null) {
+            $this->config = parse_ini_file($this->fileName, true);
+        }
+
+        return $this->config;
+    }
+
+    /**
+     * @param array $path
+     *
+     * @return string|null
+     */
+    private function getValue(array $path): string
+    {
+        $config = $this->getConfig();
+        foreach ($path as $pathSegment) {
+            if (!isset($config[$pathSegment])) {
+                throw new ConfigException(
+                    sprintf('Unable to get value of %s in %s', implode('.', $path), $this->fileName)
+                );
+            }
+
+            $config = $config[$pathSegment];
+        }
+
+        if (!is_string($config)) {
+            throw new ConfigException(
+                sprintf('Value of %s in %s must be a string', implode('.', $path), $this->fileName)
+            );
+        }
+
+        return $config;
+    }
+
+    /**
+     * @param string|null $key
+     * @param string $defaultKey
+     *
+     * @return string|null
+     */
+    private function getKeyOrDefault(?string $key, string $defaultKey): ?string
+    {
+        if ($key === null) {
+            $key = $this->getValue([static::SECTION_DEFAULTS, $defaultKey]);
+        }
+
+        return $key;
+    }
+
+    /**
+     * @param string|null $botName
+     *
+     * @return Bot
+     */
+    public function getBot(?string $botName): Bot
+    {
+        try {
+            $botName = $this->getKeyOrDefault($botName, static::KEY_BOT);
+            $token = $this->getValue([static::SECTION_BOTS, $botName]);
+        } catch (ConfigException $e) {
+            throw new RuntimeException(sprintf('Failed to find bot: %s', $e->getMessage()));
+        }
+
+        return new Bot($token, $botName);
+    }
+
+    /**
+     * @param string|null $chatName
+     *
+     * @return Chat
+     */
+    public function getChat(?string $chatName): Chat
+    {
+        try {
+            $chatName = $this->getKeyOrDefault($chatName, static::KEY_CHAT);
+            $chatId = $this->getValue([static::SECTION_CHATS, $chatName]);
+        } catch (ConfigException $e) {
+            throw new RuntimeException(sprintf('Failed to find chat: %s', $e->getMessage()));
+        }
+
+        return new Chat($chatId, $chatName);
+    }
+}
+
+final class ConfigBuilder
+{
+    private const CONFIG_NAME = 'tgsay.ini';
+
+    public function getDefaultPaths(): array
+    {
+        return [
+            $_SERVER['HOME'] . '/.config/' . static::CONFIG_NAME,
+            '/etc/' . static::CONFIG_NAME,
+        ];
+    }
+
+    /**
+     * @param string|null $fileName
+     *
+     * @return Config
+     */
+    public function build(?string $fileName): Config
+    {
+        if ($fileName === null) {
+            $possiblePaths = $this->getDefaultPaths();
+        } else {
+            $possiblePaths = array_filter([$fileName]);
+        }
+
+        $paths = array_filter(
+            $possiblePaths,
+            function (string $fileName): bool {
+                return file_exists($fileName) && is_readable($fileName);
+            }
+        );
+
+        if (count($paths) === 0) {
+            throw new RuntimeException(
+                sprintf('No readable config found in following paths: %s', implode(', ', $possiblePaths))
+            );
+        }
+
+        return new Config(reset($paths));
+    }
+}
+
+final class Arguments
+{
+    public const BOT_NAME = 'bot';
+    public const CHAT_NAME = 'chat';
+    public const MESSAGE = 'msg';
+    public const CONFIG = 'config';
+    public const QUIET = 'quiet';
+    public const SILENT_MESSAGE = 'silent';
+    public const FORMAT_HTML = 'html';
+    public const FORMAT_MARKDOWN = 'md';
+    
+    private const OPTIONAL = '::';
+
+    private $arguments;
+
+    /**
+     * @return string[]bool[]
+     */
+    private function getArguments(): array
+    {
+        if ($this->arguments === null) {
+            $this->arguments = getopt(
+                '',
+                [
+                    static::BOT_NAME . static::OPTIONAL,
+                    static::CHAT_NAME . static::OPTIONAL,
+                    static::MESSAGE . static::OPTIONAL,
+                    static::CONFIG . static::OPTIONAL,
+                    self::QUIET,
+                    self::SILENT_MESSAGE,
+                    self::FORMAT_HTML,
+                    self::FORMAT_MARKDOWN,
+                ]
+            );
+        }
+
+        return $this->arguments;
+    }
+
+    /**
+     * @param string $argName
+     *
+     * @return bool|string|null
+     */
+    private function getValue(string $argName)
+    {
+        $arguments = $this->getArguments();
+        return isset($arguments[$argName]) ? (string) $arguments[$argName] : null;
+    }
+
+    private function getFlag(string $argName): bool
+    {
+        $arguments = $this->getArguments();
+        return array_key_exists($argName, $arguments);
+    }
+
+    /**
+     * @return string|null
+     */
+    public function getBotName(): ?string
+    {
+        return $this->getValue(static::BOT_NAME);
+    }
+
+    /**
+     * @return string|null
+     */
+    public function getChatName(): ?string
+    {
+        return $this->getValue(static::CHAT_NAME);
+    }
+
+    /**
+     * @return string|null
+     */
+    public function getMessage(): ?string
+    {
+        return $this->getValue(static::MESSAGE);
+    }
+
+    /**
+     * @return string|null
+     */
+    public function getConfigFileName(): ?string
+    {
+        return $this->getValue(static::CONFIG);
+    }
+
+    public function isQuiet(): bool
+    {
+        return $this->getFlag(static::QUIET);
+    }
+
+    public function isSilentMessage(): bool
+    {
+        return $this->getFlag(static::SILENT_MESSAGE);
+    }
+
+    public function isHtml(): bool
+    {
+        return $this->getFlag(static::FORMAT_HTML);
+    }
+
+    public function isMarkdown(): bool
+    {
+        return $this->getFlag(static::FORMAT_MARKDOWN);
+    }
+}
+
+final class Logger
+{
+    private $quiet = false;
+
+    private function log($stream, string $message): void
+    {
+        fwrite($stream, $message);
+    }
+
+    public function setQuiet(bool $quiet): void
+    {
+        $this->quiet = $quiet;
+    }
+
+    public function error(string $message): void
+    {
+        $this->log(STDERR, $message . PHP_EOL);
+    }
+
+    public function info(string $message, bool $newline = true): void
+    {
+        if (!$this->quiet) {
+            $this->log(STDOUT, sprintf('%s%s', $message, $newline ? PHP_EOL : ''));
+        }
+    }
+}
+
+final class StdinHelper
+{
+    public function read(): ?string
+    {
+        stream_set_blocking(STDIN, false);
+        $contents = stream_get_contents(STDIN);
+
+        return is_string($contents) && $contents !== '' ? $contents : null;
+    }
+}
+
+final class Sender
+{
+    /**
+     * @var Bot
+     */
+    private $bot;
+
+    /**
+     * @var Chat
+     */
+    private $chat;
+
+    /**
+     * @var Message
+     */
+    private $message;
+
+    /**
+     * @param Bot $bot
+     * @param Chat $chat
+     * @param Message $message
+     */
+    public function __construct(Bot $bot, Chat $chat, Message $message)
+    {
+        $this->bot = $bot;
+        $this->chat = $chat;
+        $this->message = $message;
+    }
+
+    /**
+     * @return array
+     */
+    private function getChatParameters(): array
+    {
+        return [
+            'chat_id' => $this->chat->getId(),
+        ];
+    }
+
+    /**
+     * @return array
+     */
+    private function getMessageParameters(): array
+    {
+        $message = $this->message;
+
+        $parameters = ['text' => $message->getText()];
+        if ($message->isSilent()) {
+            $parameters['disable_notification'] = 1;
+        }
+        
+        $formatMap = [
+                Message::FORMAT_HTML => 'HTML',
+                Message::FORMAT_MARKDOWN => 'Markdown',
+        ];
+
+        if (isset($formatMap[$message->getFormat()])) {
+            $parameters['parse_mode'] = $formatMap[$message->getFormat()];
+        }
+        
+        return $parameters;
+    }
+
+    public function send(): void
+    {
+        $parameters = array_merge($this->getChatParameters(), $this->getMessageParameters());
+
+        $url = sprintf(
+            'https://api.telegram.org/bot%s/sendMessage?%s',
+            $this->bot->getId(),
+            http_build_query($parameters)
+        );
+
+        $response = @file_get_contents($url);
+        if ($response === false) {
+            throw new RuntimeException('Network error');
+        }
+
+        $parsedResponse = @json_decode($response, true);
+        if (empty($response)) {
+            throw new RuntimeException('Unexpected response from API');
+        }
+
+        $success = $parsedResponse['ok'] ?? false;
+        if (!$success) {
+            throw new RuntimeException(sprintf('API returned an error: %s', $response));
+        }
+    }
+}
+
+function showUsage(Logger $logger, ConfigBuilder $configBuilder): void
+{
+    $logger->info('tgsay send messages to Telegram.');
+    $logger->info('');
+    $logger->info('To use it you must create a really simple config file. Here\'s example:');
+
+    $config = [
+        Config::SECTION_BOTS => [
+            'keys are bot aliases, not the actual bot names, must have at least one',
+            'JenkinsBot' => '<bot token>',
+            'ZabbixBot' => '<bot token>',
+        ],
+        Config::SECTION_CHATS => [
+            'same here: keys are just aliases, must have at least one',
+            'Myself' => '<person id>',
+            'TeamChat' => '<chat id>',
+            'AlertChannel' => '<channel id>',
+        ],
+        Config::SECTION_DEFAULTS => [
+            'defaults will be used if corresponding arguments are skipped, optional',
+            Config::KEY_BOT => '<bot alias>',
+            Config::KEY_CHAT => '<chat alias>',
+        ],
+    ];
+
+    foreach ($config as $section => $values) {
+        $logger->info('');
+        $logger->info(sprintf('  [%s]', $section));
+        $comment = array_shift($values);
+        $logger->info(sprintf('  ; %s', $comment));
+        foreach ($values as $key => $value) {
+            $logger->info(sprintf('  %s = %s', str_pad($key, 12, ' '), $value));
+        }
+    }
+
+    $logger->info('');
+    $logger->info('Supported arguments:');
+    $logger->info('');
+    $arguments = [
+        Arguments::BOT_NAME => 'bot alias (default if skipped)',
+        Arguments::CHAT_NAME => 'chat alias (default if skipped)',
+        Arguments::MESSAGE => 'message (STDIN if skipped)',
+        Arguments::SILENT_MESSAGE => 'suppress audible notifications',
+        Arguments::FORMAT_HTML => 'use HTML for formatting',
+        Arguments::FORMAT_MARKDOWN => 'use Markdown for formatting',
+        Arguments::CONFIG => sprintf('config path (%s if skipped)', implode(' or ', $configBuilder->getDefaultPaths())),
+        Arguments::QUIET => 'be quiet',
+    ];
+
+    foreach ($arguments as $argument => $description) {
+        $logger->info(sprintf('  --%s %s', str_pad($argument, 8, ' '), $description));
+    }
+}
+
+
+
+$logger = new Logger();
+$configBuilder = new ConfigBuilder();
+
+try {
+    $arguments = new Arguments();
+    if ($arguments->isQuiet()) {
+        $logger->setQuiet(true);
+    }
+
+    $config = $configBuilder->build($arguments->getConfigFileName());
+
+    $bot = $config->getBot($arguments->getBotName());
+    $chat = $config->getChat($arguments->getChatName());
+
+    $messageBody = $arguments->getMessage();
+    if ($messageBody === null) {
+        $messageBody = (new StdinHelper())->read();
+    }
+
+    if ($messageBody === null) {
+        throw new ShowUsageException(
+            sprintf('Message is empty. You may pass it via STDIN or --%s argument.', Arguments::MESSAGE)
+        );
+    }
+
+    $messageBuilder = new MessageBuilder($arguments);
+    $message = $messageBuilder->build($messageBody);
+
+    $logger->info(sprintf('%s → %s:', $bot->getName(), $chat->getName()));
+    $logger->info($messageBody);
+
+    $sender = new Sender($bot, $chat, $message);
+
+    $logger->info('Sending... ', false);
+
+    $sender->send();
+
+    $logger->info('ok');
+} catch (ShowUsageException $e) {
+    $logger->setQuiet(false);
+    $logger->error($e->getMessage());
+    $logger->info('');
+    showUsage($logger, $configBuilder);
+} catch (Throwable $e) {
+    $logger->error($e->getMessage());
+    die(1);
+}
