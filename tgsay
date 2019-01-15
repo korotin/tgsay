@@ -333,8 +333,12 @@ final class Arguments
     public const SILENT_MESSAGE = 'silent';
     public const FORMAT_HTML = 'html';
     public const FORMAT_MARKDOWN = 'md';
+    public const RETRY_COUNT = 'retry';
     
     private const OPTIONAL = '::';
+    private const DEFAULTS = [
+        self::RETRY_COUNT => 1,
+    ];
 
     private $arguments;
 
@@ -351,6 +355,7 @@ final class Arguments
                     static::CHAT_NAME . static::OPTIONAL,
                     static::MESSAGE . static::OPTIONAL,
                     static::CONFIG . static::OPTIONAL,
+                    static::RETRY_COUNT . static::OPTIONAL,
                     self::QUIET,
                     self::SILENT_MESSAGE,
                     self::FORMAT_HTML,
@@ -365,12 +370,22 @@ final class Arguments
     /**
      * @param string $argName
      *
+     * @return int|string|null
+     */
+    private function getDefaultValue(string $argName)
+    {
+        return static::DEFAULTS[$argName] ?? null;
+    }
+
+    /**
+     * @param string $argName
+     *
      * @return bool|string|null
      */
     private function getValue(string $argName)
     {
         $arguments = $this->getArguments();
-        return isset($arguments[$argName]) ? (string) $arguments[$argName] : null;
+        return isset($arguments[$argName]) ? (string) $arguments[$argName] : $this->getDefaultValue($argName);
     }
 
     private function getFlag(string $argName): bool
@@ -401,6 +416,11 @@ final class Arguments
     public function getMessage(): ?string
     {
         return $this->getValue(static::MESSAGE);
+    }
+
+    public function getRetryCount(): int
+    {
+        return (int) $this->getValue(static::RETRY_COUNT);
     }
 
     /**
@@ -607,6 +627,7 @@ function showUsage(Logger $logger, ConfigBuilder $configBuilder): void
         Arguments::FORMAT_MARKDOWN => 'use Markdown for formatting',
         Arguments::CONFIG => sprintf('config path (%s if skipped)', implode(' or ', $configBuilder->getDefaultPaths())),
         Arguments::QUIET => 'be quiet',
+        Arguments::RETRY_COUNT => 'retry count'
     ];
 
     foreach ($arguments as $argument => $description) {
@@ -641,6 +662,8 @@ try {
         );
     }
 
+    $retryCount = $arguments->getRetryCount();
+
     $messageBuilder = new MessageBuilder($arguments);
     $message = $messageBuilder->build($messageBody);
 
@@ -649,9 +672,19 @@ try {
 
     $sender = new Sender($bot, $chat, $message);
 
-    $logger->info('Sending... ', false);
+    $attempt = 0;
+    while ($attempt < $retryCount) {
+        $attempt++;
 
-    $sender->send();
+        $logger->info(sprintf('Sending (%s of %s attempt)... ', $attempt, $retryCount), false);
+
+        try {
+            $sender->send();
+            break;
+        } catch (RuntimeException $e) {
+            $logger->error($e->getMessage());
+        }
+    }
 
     $logger->info('ok');
 } catch (ShowUsageException $e) {
