@@ -490,52 +490,86 @@ final class StdinHelper
     }
 }
 
+interface TransportInterface
+{
+    /**
+     * @param string $url
+     * @param array $params
+     *
+     * @return string
+     */
+    public function post(string $url, array $params): string;
+}
+
+class CurlTransport implements TransportInterface
+{
+    /**
+     * @param string $url
+     * @param array $params
+     *
+     * @return string
+     */
+    public function post(string $url, array $params): string
+    {
+        $ch = curl_init($url);
+        curl_setopt_array(
+            $ch,
+            [
+                CURLOPT_POST => true,
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_POSTFIELDS => http_build_query($params),
+            ]
+        );
+
+        $result = curl_exec($ch);
+        $error = curl_error($ch);
+
+        curl_close($ch);
+
+        if ($result === false) {
+            throw new RuntimeException(
+                empty($error) ? 'Unknown cURL error' : sprintf('cURL error: %s', curl_error($ch))
+            );
+        }
+
+        return $result;
+    }
+}
+
 final class Sender
 {
     /**
-     * @var Bot
+     * @var TransportInterface
      */
-    private $bot;
+    private $transport;
 
     /**
-     * @var Chat
+     * @param TransportInterface $transport
      */
-    private $chat;
-
-    /**
-     * @var Message
-     */
-    private $message;
-
-    /**
-     * @param Bot $bot
-     * @param Chat $chat
-     * @param Message $message
-     */
-    public function __construct(Bot $bot, Chat $chat, Message $message)
+    public function __construct(TransportInterface $transport)
     {
-        $this->bot = $bot;
-        $this->chat = $chat;
-        $this->message = $message;
+        $this->transport = $transport;
     }
 
     /**
+     * @param Chat $chat
+     *
      * @return array
      */
-    private function getChatParameters(): array
+    private function getChatParameters(Chat $chat): array
     {
         return [
-            'chat_id' => $this->chat->getId(),
+            'chat_id' => $chat->getId(),
         ];
     }
 
     /**
+     * @param Message $message
+     *
      * @return array
      */
-    private function getMessageParameters(): array
+    private function getMessageParameters(Message $message): array
     {
-        $message = $this->message;
-
         $parameters = ['text' => $message->getText()];
         if ($message->isSilent()) {
             $parameters['disable_notification'] = 1;
@@ -553,20 +587,14 @@ final class Sender
         return $parameters;
     }
 
-    public function send(): void
+    public function send(Bot $bot, Chat $chat, Message $message): void
     {
-        $parameters = array_merge($this->getChatParameters(), $this->getMessageParameters());
+        $parameters = array_merge($this->getChatParameters($chat), $this->getMessageParameters($message));
 
-        $url = sprintf(
-            'https://api.telegram.org/bot%s/sendMessage?%s',
-            $this->bot->getId(),
-            http_build_query($parameters)
+        $response = $this->transport->post(
+            sprintf('https://api.telegram.org/bot%s/sendMessage', $bot->getId()),
+            $parameters
         );
-
-        $response = @file_get_contents($url);
-        if ($response === false) {
-            throw new RuntimeException('Network error');
-        }
 
         $parsedResponse = @json_decode($response, true);
         if (empty($response)) {
@@ -670,7 +698,7 @@ try {
     $logger->info(sprintf('%s → %s:', $bot->getName(), $chat->getName()));
     $logger->info($messageBody);
 
-    $sender = new Sender($bot, $chat, $message);
+    $sender = new Sender(new CurlTransport());
 
     $attempt = 0;
     while ($attempt < $retryCount) {
@@ -679,7 +707,7 @@ try {
         $logger->info(sprintf('Sending (%s of %s attempt)... ', $attempt, $retryCount), false);
 
         try {
-            $sender->send();
+            $sender->send($bot, $chat, $message);
             break;
         } catch (RuntimeException $e) {
             $logger->error($e->getMessage());

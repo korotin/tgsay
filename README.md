@@ -5,7 +5,8 @@ tgsay
 Requirements
 ------------
 * *nix
-* PHP 7.2
+* PHP >= 7.2
+* cURL extension
 
 Installation
 ------------
